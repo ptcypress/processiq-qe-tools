@@ -6,33 +6,18 @@ from scipy import stats
 from processiq.ui import set_page, df_preview, kpi_row, warn_empty
 from processiq.data import load_table, infer_numeric_columns, coerce_numeric
 from processiq.metrics import capability
+from processiq.shared import get_working_df
 
 set_page("Capability", icon="🎯")
 
 st.title("Capability")
 st.caption("Cp/Cpk (within) and Pp/Ppk (overall) with quick visuals.")
 
-from processiq.state import get_df, clear_df
-shared_df, shared_name = get_df()
-
-use_shared = False
-if shared_df is not None:
-    c1, c2 = st.columns([3,1])
-    with c1:
-        st.info(f"Using shared dataset: {shared_name}")
-    with c2:
-        if st.button("Clear"):
-            clear_df()
-            st.rerun()
-    use_shared = st.checkbox("Use shared dataset", value=True)
-
-uploaded = st.file_uploader("Upload CSV or Excel", type=["csv","xlsx","xls"])
-loaded = load_table(uploaded)
-if not loaded:
-    warn_empty()
+df, name = get_working_df(key_prefix="capability")
+if df is None:
+    warn_empty("Upload a dataset here OR load one in Data Explorer and use the shared dataset.")
     st.stop()
 
-df = loaded.df
 df_preview(df)
 
 numeric_cols = infer_numeric_columns(df)

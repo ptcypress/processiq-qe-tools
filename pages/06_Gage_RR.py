@@ -10,6 +10,20 @@ set_page("Gage R&R (Crossed)", icon="🧪")
 st.title("Gage R&R (Crossed, ANOVA)")
 st.caption("Part × Operator with repeats. Outputs variance components + % contribution.")
 
+from processiq.state import get_df, clear_df
+shared_df, shared_name = get_df()
+
+use_shared = False
+if shared_df is not None:
+    c1, c2 = st.columns([3,1])
+    with c1:
+        st.info(f"Using shared dataset: {shared_name}")
+    with c2:
+        if st.button("Clear"):
+            clear_df()
+            st.rerun()
+    use_shared = st.checkbox("Use shared dataset", value=True)
+
 uploaded = st.file_uploader("Upload CSV or Excel", type=["csv","xlsx","xls"])
 loaded = load_table(uploaded)
 if not loaded:

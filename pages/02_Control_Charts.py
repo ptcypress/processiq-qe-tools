@@ -3,7 +3,7 @@ import streamlit as st
 import plotly.graph_objects as go
 from processiq.ui import set_page, df_preview, warn_empty
 from processiq.data import load_table, infer_numeric_columns, coerce_numeric
-from processiq.spc import imr, xbar_r, p_chart
+from processiq.spc import imr, xbar_r, p_chart, nelson_rules_1_2_3_4, imr_sigma_from_mrbar
 
 set_page("Control Charts", icon="📈")
 
@@ -63,14 +63,47 @@ if chart_type == "I‑MR (Individuals)":
     col = st.selectbox("Measurement column", numeric_cols)
     x = coerce_numeric(df[col]).dropna()
     dd, xline, mrline = imr(x)
+    sigma = imr_sigma_from_mrbar(mrline.center)
+    viol = nelson_rules_1_2_3_4(dd["X"], center=xline.center, sigma=sigma if sigma else float("nan"))
+
+    # mark violating indices for highlighting
+    viol_idx = set(viol["index"].astype(int).tolist()) if len(viol) else set()
 
     fig1 = go.Figure()
-    fig1.add_trace(go.Scatter(y=dd["X"], mode="lines+markers", name="X"))
+    # Base line
+    fig1.add_trace(go.Scatter(y=dd["X"], mode="lines", name="X"))
+
+    # Points (normal vs flagged)
+    yvals = dd["X"].to_numpy()
+    xvals = list(range(len(yvals)))
+    flag_mask = [i in viol_idx for i in xvals]
+
+    fig1.add_trace(go.Scatter(
+        x=[xvals[i] for i in range(len(xvals)) if not flag_mask[i]],
+        y=[yvals[i] for i in range(len(yvals)) if not flag_mask[i]],
+        mode="markers",
+        name="In-control pts"
+    ))
+
+    fig1.add_trace(go.Scatter(
+        x=[xvals[i] for i in range(len(xvals)) if flag_mask[i]],
+        y=[yvals[i] for i in range(len(yvals)) if flag_mask[i]],
+        mode="markers",
+        name="Rule violations"
+    ))
+
+    
     fig1.add_hline(y=xline.center, line_dash="dash", annotation_text="CL")
     if xline.ucl is not None: fig1.add_hline(y=xline.ucl, line_dash="dot", annotation_text="UCL")
     if xline.lcl is not None: fig1.add_hline(y=xline.lcl, line_dash="dot", annotation_text="LCL")
     fig1.update_layout(title="Individuals (I) Chart", xaxis_title="Order", yaxis_title=col)
     st.plotly_chart(fig1, use_container_width=True)
+    st.subheader("Run rule violations")
+    if len(viol):
+        st.dataframe(viol, use_container_width=True)
+    else:
+        st.write("No Nelson rule violations detected (R1–R4).")
+
 
     fig2 = go.Figure()
     fig2.add_trace(go.Scatter(y=dd["MR"], mode="lines+markers", name="MR"))
@@ -79,6 +112,12 @@ if chart_type == "I‑MR (Individuals)":
     if mrline.lcl is not None: fig2.add_hline(y=mrline.lcl, line_dash="dot", annotation_text="LCL")
     fig2.update_layout(title="Moving Range (MR) Chart", xaxis_title="Order", yaxis_title="MR")
     st.plotly_chart(fig2, use_container_width=True)
+    st.subheader("Run rule violations")
+    if len(viol):
+        st.dataframe(viol, use_container_width=True)
+    else:
+        st.write("No Nelson rule violations detected (R1–R4).")
+
 
 elif chart_type == "Xbar‑R (Subgroup)":
     numeric_cols = infer_numeric_columns(df)

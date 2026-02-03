@@ -3,6 +3,7 @@ import streamlit as st
 import numpy as np
 import plotly.express as px
 from scipy import stats
+from scipy.stats import norm
 from processiq.ui import set_page, df_preview, kpi_row, warn_empty
 from processiq.data import load_table, infer_numeric_columns, coerce_numeric
 from processiq.metrics import capability
@@ -69,6 +70,17 @@ obs_ppm = (oos / len(x)) * 1_000_000 if len(x) else float("nan")
 
 st.divider()
 fig = px.histogram(x.to_frame(name=col), x=col, nbins=40, marginal="box")
+xx = np.linspace(x.min(), x.max(), 300)
+yy = norm.pdf(xx, loc=res.mean, scale=res.stdev_overall)
+fig.add_trace(
+    go.Scatter(
+        x=xx,
+        y=yy,
+        mode="lines",
+        name="Overall normal",
+        line=dict(width=2)
+    )
+)
 if lsl is not None:
     fig.add_vline(x=lsl, line_dash="dot", annotation_text="LSL")
 if usl is not None:

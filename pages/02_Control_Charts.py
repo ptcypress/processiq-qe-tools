@@ -5,6 +5,7 @@ import pandas as pd
 from processiq.ui import set_page, df_preview, warn_empty
 from processiq.data import load_table, infer_numeric_columns, coerce_numeric
 from processiq.spc import imr, xbar_r, p_chart, nelson_rules_1_2_3_4, imr_sigma_from_mrbar
+from process.shared import get_working_df
 
 set_page("Control Charts", icon="📈")
 
@@ -21,15 +22,15 @@ df_preview(df)
 
 
 use_shared = False
-if shared_df is not None:
-    c1, c2 = st.columns([3,1])
-    with c1:
-        st.info(f"Using shared dataset: {shared_name}")
-    with c2:
-        if st.button("Clear"):
-            clear_df()
-            st.rerun()
-    use_shared = st.checkbox("Use shared dataset", value=True)
+#if shared_df is not None:
+    #c1, c2 = st.columns([3,1])
+    #with c1:
+        #st.info(f"Using shared dataset: {shared_name}")
+    #with c2:
+        #if st.button("Clear"):
+            #clear_df()
+            #st.rerun()
+    #use_shared = st.checkbox("Use shared dataset", value=True)
 
 from processiq.state import get_df, clear_df
 shared_df, shared_name = get_df()

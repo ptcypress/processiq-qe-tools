@@ -19,7 +19,7 @@ if not loaded:
 df = loaded.df
 #Save as the shared dataset
 from processiq.state import set_df
-set_def(df, loaded.source_name)
+set_df(df, loaded.source_name)
 st.success(f"Loaded dataset: {loaded.source_name} (saved for other tools)")
 df_preview(df, max_rows=50)
 

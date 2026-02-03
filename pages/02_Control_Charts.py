@@ -1,6 +1,7 @@
 from __future__ import annotations
 import streamlit as st
 import plotly.graph_objects as go
+import pandas as pd
 from processiq.ui import set_page, df_preview, warn_empty
 from processiq.data import load_table, infer_numeric_columns, coerce_numeric
 from processiq.spc import imr, xbar_r, p_chart, nelson_rules_1_2_3_4, imr_sigma_from_mrbar
@@ -50,8 +51,11 @@ else:
     df = loaded.df
     df_preview(df)
 
-
-chart_type = st.radio("Chart type", ["I‑MR (Individuals)", "Xbar‑R (Subgroup)", "p-chart (Attribute)"], horizontal=True)
+chart_type = st.radio(
+    "Chart type",
+    ["I-MR (Individuals)", "Xbar-R (Subgroup)", "p-chart (Attribute)", "np-chart", "c-chart", "u-chart"],
+    horizontal=True
+)
 
 st.divider()
 
@@ -118,6 +122,74 @@ if chart_type == "I‑MR (Individuals)":
     else:
         st.write("No Nelson rule violations detected (R1–R4).")
 
+
+elif chart_type == "np-chart":
+    defect_col = st.selectbox("Defectives column (count)", df.columns.tolist())
+    n_col = st.selectbox("Sample size column (n)", df.columns.tolist())
+    d = df[[defect_col, n_col]].copy()
+    d[defect_col] = pd.to_numeric(d[defect_col], errors="coerce")
+    d[n_col] = pd.to_numeric(d[n_col], errors="coerce")
+    d = d.dropna()
+    if len(d) == 0:
+        st.error("No valid rows.")
+        st.stop()
+    pbar = d[defect_col].sum() / d[n_col].sum()
+    npbar = pbar * d[n_col]
+    sigma = (d[n_col] * pbar * (1 - pbar)) ** 0.5
+    d["np"] = d[defect_col]
+    d["UCL"] = (npbar + 3*sigma).clip(lower=0)
+    d["LCL"] = (npbar - 3*sigma).clip(lower=0)
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(y=d["np"], mode="lines+markers", name="np"))
+    fig.add_trace(go.Scatter(y=d["UCL"], mode="lines", name="UCL"))
+    fig.add_trace(go.Scatter(y=d["LCL"], mode="lines", name="LCL"))
+    fig.update_layout(title="np-chart", xaxis_title="Row order", yaxis_title="Number defective")
+    st.plotly_chart(fig, use_container_width=True)
+
+elif chart_type == "c-chart":
+    c_col = st.selectbox("Defects column (count)", df.columns.tolist())
+    d = pd.to_numeric(df[c_col], errors="coerce").dropna().reset_index(drop=True)
+    if len(d) == 0:
+        st.error("No valid rows.")
+        st.stop()
+    cbar = float(d.mean())
+    ucl = cbar + 3*(cbar**0.5)
+    lcl = max(cbar - 3*(cbar**0.5), 0.0)
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(y=d, mode="lines+markers", name="c"))
+    fig.add_hline(y=cbar, line_dash="dash", annotation_text="CL")
+    fig.add_hline(y=ucl, line_dash="dot", annotation_text="UCL")
+    fig.add_hline(y=lcl, line_dash="dot", annotation_text="LCL")
+    fig.update_layout(title="c-chart", xaxis_title="Order", yaxis_title="Defect count")
+    st.plotly_chart(fig, use_container_width=True)
+
+elif chart_type == "u-chart":
+    c_col = st.selectbox("Defects column (count)", df.columns.tolist())
+    n_col = st.selectbox("Units/area column (n)", df.columns.tolist())
+    d = df[[c_col, n_col]].copy()
+    d[c_col] = pd.to_numeric(d[c_col], errors="coerce")
+    d[n_col] = pd.to_numeric(d[n_col], errors="coerce")
+    d = d.dropna()
+    if len(d) == 0:
+        st.error("No valid rows.")
+        st.stop()
+
+    u = d[c_col] / d[n_col]
+    ubar = float(d[c_col].sum() / d[n_col].sum())
+    se = (ubar / d[n_col]) ** 0.5
+    d["u"] = u
+    d["UCL"] = ubar + 3*se
+    d["LCL"] = (ubar - 3*se).clip(lower=0.0)
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(y=d["u"], mode="lines+markers", name="u"))
+    fig.add_trace(go.Scatter(y=d["UCL"], mode="lines", name="UCL"))
+    fig.add_trace(go.Scatter(y=d["LCL"], mode="lines", name="LCL"))
+    fig.add_hline(y=ubar, line_dash="dash", annotation_text="CL")
+    fig.update_layout(title="u-chart", xaxis_title="Row order", yaxis_title="Defects per unit")
+    st.plotly_chart(fig, use_container_width=True)
 
 elif chart_type == "Xbar‑R (Subgroup)":
     numeric_cols = infer_numeric_columns(df)

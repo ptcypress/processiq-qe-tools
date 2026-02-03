@@ -2,6 +2,7 @@ from __future__ import annotations
 import streamlit as st
 import numpy as np
 import plotly.express as px
+import plotly.graph_objects as go
 from scipy import stats
 from scipy.stats import norm
 from processiq.ui import set_page, df_preview, kpi_row, warn_empty

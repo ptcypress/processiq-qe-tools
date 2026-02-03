@@ -83,3 +83,65 @@ def p_chart(df: pd.DataFrame, defect_col: str, n_col: str):
     out["UCL"] = ucl
     out["LCL"] = lcl
     return out, pbar
+
+def nelson_rules_1_2_3_4(x: pd.Series, center: float, sigma: float) -> pd.DataFrame:
+    """
+    Basic high-value run rules:
+    R1: One point beyond 3σ
+    R2: Two of three beyond 2σ on same side
+    R3: Four of five beyond 1σ on same side
+    R4: Eight in a row on same side of center
+    Returns a table of violations with point indices.
+    """
+    xs = pd.to_numeric(x, errors="coerce").dropna().reset_index(drop=True).to_numpy()
+    n = len(xs)
+    rows = []
+    if n == 0 or not np.isfinite(sigma) or sigma <= 0:
+        return pd.DataFrame(columns=["rule", "index", "value", "detail"])
+
+    z = (xs - center) / sigma
+
+    # R1
+    for i in range(n):
+        if abs(z[i]) > 3:
+            rows.append(("R1", i, xs[i], "|z| > 3"))
+
+    # R2: 2 of 3 beyond 2σ same side
+    for i in range(2, n):
+        window = z[i-2:i+1]
+        pos = np.sum(window > 2)
+        neg = np.sum(window < -2)
+        if pos >= 2:
+            rows.append(("R2", i, xs[i], "2 of 3 > +2σ"))
+        if neg >= 2:
+            rows.append(("R2", i, xs[i], "2 of 3 < -2σ"))
+
+    # R3: 4 of 5 beyond 1σ same side
+    for i in range(4, n):
+        window = z[i-4:i+1]
+        pos = np.sum(window > 1)
+        neg = np.sum(window < -1)
+        if pos >= 4:
+            rows.append(("R3", i, xs[i], "4 of 5 > +1σ"))
+        if neg >= 4:
+            rows.append(("R3", i, xs[i], "4 of 5 < -1σ"))
+
+    # R4: 8 in a row on same side
+    for i in range(7, n):
+        window = xs[i-7:i+1]
+        if np.all(window > center):
+            rows.append(("R4", i, xs[i], "8 in a row above CL"))
+        if np.all(window < center):
+            rows.append(("R4", i, xs[i], "8 in a row below CL"))
+
+    return pd.DataFrame(rows, columns=["rule", "index", "value", "detail"])
+
+
+def imr_sigma_from_mrbar(mrbar: float) -> float | None:
+    # d2=1.128 for MR(2)
+    if mrbar is None or not np.isfinite(mrbar) or mrbar <= 0:
+        return None
+    return mrbar / 1.128
+
+
+

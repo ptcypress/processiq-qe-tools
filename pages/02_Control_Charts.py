@@ -123,38 +123,29 @@ elif chart_type == "Xbar-R (Subgroup)":
     value_col = st.selectbox("Measurement column", numeric_cols)
     subgroup_col = st.selectbox("Subgroup column", df.columns.tolist())
 
-    d = df[[subgroup_col, value_col]].copy()
-    d[value_col] = pd.to_numeric(d[value_col], errors="coerce")
-    d = d.dropna()
+    # NOTE: xbar_r expects the full df + column names
+    out, xbar_line, r_line, n = xbar_r(df, value_col=value_col, subgroup_col=subgroup_col)
 
-    if d.empty:
-        st.error("No valid rows after cleaning. Check column selections.")
-        st.stop()
-
-    # xbar_r expects a vector and subgroup IDs; keep order as in file
-    dd, xbar_line, r_line = xbar_r(d[value_col], d[subgroup_col])
+    st.caption(f"Detected subgroup size (mode): n = {n}")
 
     # Xbar chart
     fig1 = go.Figure()
-    fig1.add_trace(go.Scatter(y=dd["Xbar"], mode="lines+markers", name="Xbar"))
+    fig1.add_trace(go.Scatter(y=out["Xbar"], mode="lines+markers", name="Xbar"))
     fig1.add_hline(y=xbar_line.center, line_dash="dash", annotation_text="CL")
-    if xbar_line.ucl is not None:
-        fig1.add_hline(y=xbar_line.ucl, line_dash="dot", annotation_text="UCL")
-    if xbar_line.lcl is not None:
-        fig1.add_hline(y=xbar_line.lcl, line_dash="dot", annotation_text="LCL")
+    fig1.add_hline(y=xbar_line.ucl, line_dash="dot", annotation_text="UCL")
+    fig1.add_hline(y=xbar_line.lcl, line_dash="dot", annotation_text="LCL")
     fig1.update_layout(title="Xbar Chart", xaxis_title="Subgroup order", yaxis_title=f"Mean({value_col})")
     st.plotly_chart(fig1, use_container_width=True)
 
     # R chart
     fig2 = go.Figure()
-    fig2.add_trace(go.Scatter(y=dd["R"], mode="lines+markers", name="R"))
+    fig2.add_trace(go.Scatter(y=out["R"], mode="lines+markers", name="R"))
     fig2.add_hline(y=r_line.center, line_dash="dash", annotation_text="CL")
-    if r_line.ucl is not None:
-        fig2.add_hline(y=r_line.ucl, line_dash="dot", annotation_text="UCL")
-    if r_line.lcl is not None:
-        fig2.add_hline(y=r_line.lcl, line_dash="dot", annotation_text="LCL")
+    fig2.add_hline(y=r_line.ucl, line_dash="dot", annotation_text="UCL")
+    fig2.add_hline(y=r_line.lcl, line_dash="dot", annotation_text="LCL")
     fig2.update_layout(title="R Chart", xaxis_title="Subgroup order", yaxis_title="Range")
     st.plotly_chart(fig2, use_container_width=True)
+
 
 
 # =========================
@@ -164,25 +155,17 @@ elif chart_type == "p-chart (Attribute)":
     defect_col = st.selectbox("Defectives column (count)", df.columns.tolist())
     n_col = st.selectbox("Sample size column (n)", df.columns.tolist())
 
-    d = df[[defect_col, n_col]].copy()
-    d[defect_col] = pd.to_numeric(d[defect_col], errors="coerce")
-    d[n_col] = pd.to_numeric(d[n_col], errors="coerce")
-    d = d.dropna()
-
-    if d.empty:
-        st.error("No valid rows after cleaning. Check column selections.")
-        st.stop()
-
-    dd, p_line = p_chart(d[defect_col], d[n_col])
+    # NOTE: p_chart expects the full df + column names
+    out, pbar = p_chart(df, defect_col=defect_col, n_col=n_col)
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(y=dd["p"], mode="lines+markers", name="p"))
-    fig.add_trace(go.Scatter(y=dd["UCL"], mode="lines", name="UCL"))
-    fig.add_trace(go.Scatter(y=dd["LCL"], mode="lines", name="LCL"))
-    fig.add_hline(y=p_line.center, line_dash="dash", annotation_text="CL")
+    fig.add_trace(go.Scatter(y=out["p"], mode="lines+markers", name="p"))
+    fig.add_trace(go.Scatter(y=out["UCL"], mode="lines", name="UCL"))
+    fig.add_trace(go.Scatter(y=out["LCL"], mode="lines", name="LCL"))
+    fig.add_hline(y=pbar, line_dash="dash", annotation_text="CL")
+
     fig.update_layout(title="p-chart", xaxis_title="Order", yaxis_title="Fraction defective")
     st.plotly_chart(fig, use_container_width=True)
-
 
 # =========================
 # np-chart

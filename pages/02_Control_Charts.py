@@ -24,14 +24,32 @@ if shared_df is not None:
             st.rerun()
     use_shared = st.checkbox("Use shared dataset", value=True)
 
-uploaded = st.file_uploader("Upload CSV or Excel", type=["csv","xlsx","xls"])
-loaded = load_table(uploaded)
-if not loaded:
-    warn_empty()
-    st.stop()
+from processiq.state import get_df, clear_df
+shared_df, shared_name = get_df()
 
-df = loaded.df
-df_preview(df)
+use_shared = False
+if shared_df is not None:
+    c1, c2 = st.columns([3,1])
+    with c1:
+        st.info(f"Shared dataset available: {shared_name}")
+    with c2:
+        if st.button("Clear shared"):
+            clear_df()
+            st.rerun()
+    use_shared = st.checkbox("Use shared dataset", value=True)
+
+if use_shared and shared_df is not None:
+    df = shared_df.copy()
+    df_preview(df)
+else:
+    uploaded = st.file_uploader("Upload CSV or Excel", type=["csv","xlsx","xls"])
+    loaded = load_table(uploaded)
+    if not loaded:
+        warn_empty()
+        st.stop()
+    df = loaded.df
+    df_preview(df)
+
 
 chart_type = st.radio("Chart type", ["I‑MR (Individuals)", "Xbar‑R (Subgroup)", "p-chart (Attribute)"], horizontal=True)
 

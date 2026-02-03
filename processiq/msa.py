@@ -31,41 +31,55 @@ def gage_rr_crossed_anova(df: pd.DataFrame, part_col: str, op_col: str, y_col: s
     parts = d[part_col].nunique()
     ops = d[op_col].nunique()
 
-    # Estimate repeats as the minimum count per Part×Op cell
     cell_counts = d.groupby([part_col, op_col]).size()
     repeats = int(cell_counts.min()) if len(cell_counts) else 0
     if repeats < 2:
         raise ValueError("Need at least 2 repeats per Part×Operator cell (min cell count).")
 
-    # Two-way random effects ANOVA approximation using fixed effects model and mean squares.
-    # Model: y ~ C(part) + C(op) + C(part):C(op)
-    model = smf.ols(f"{y_col} ~ C({part_col}) + C({op_col}) + C({part_col}):C({op_col})", data=d).fit()
-    aov = sm.stats.anova_lm(model, typ=2)
+    # Fit two-way model with interaction
+    formula = f"{y_col} ~ C({part_col}) + C({op_col}) + C({part_col}):C({op_col})"
+    model = smf.ols(formula, data=d).fit()
 
-    
+    aov = sm.stats.anova_lm(model, typ=2).copy()
 
-    # statsmodels ANOVA table doesn't always include mean_sq; compute it
-    aov = aov.copy()
+    # Robust: compute mean squares ourselves (some statsmodels versions don't include it)
+    if "sum_sq" not in aov.columns or "df" not in aov.columns:
+        raise ValueError(f"Unexpected ANOVA table columns: {list(aov.columns)}")
+
     aov["mean_sq"] = aov["sum_sq"] / aov["df"]
 
-    ms_part = float(aov.loc[f"C({part_col})", "mean_sq"])
-    ms_op   = float(aov.loc[f"C({op_col})", "mean_sq"])
-    ms_int  = float(aov.loc[f"C({part_col}):C({op_col})", "mean_sq"])
-    ms_err  = float(aov.loc["Residual", "mean_sq"])
+    # Robust: find the correct row keys (index labels can vary slightly)
+    idx = list(aov.index)
 
+    def find_row(contains: str) -> str:
+        matches = [r for r in idx if contains in str(r)]
+        if not matches:
+            raise ValueError(f"Could not find ANOVA row containing '{contains}'. Rows: {idx}")
+        return matches[0]
 
-    # Variance components (common GR&R approximation):
+    row_part = find_row(f"C({part_col})")
+    row_op = find_row(f"C({op_col})")
+    row_int = find_row(f"C({part_col}):C({op_col})")
+    row_err = find_row("Residual")
+
+    ms_part = float(aov.loc[row_part, "mean_sq"])
+    ms_op   = float(aov.loc[row_op, "mean_sq"])
+    ms_int  = float(aov.loc[row_int, "mean_sq"])
+    ms_err  = float(aov.loc[row_err, "mean_sq"])
+
+    # Variance components (common crossed GRR approximation)
     var_repeat = ms_err
-    var_repro = max((ms_op - ms_int) / (parts * repeats), 0.0)
+    var_repro_main = max((ms_op - ms_int) / (parts * repeats), 0.0)
     var_int = max((ms_int - ms_err) / repeats, 0.0)
-    # Some methods include interaction in reproducibility; we'll include it there.
-    var_repro_total = var_repro + var_int
+
+    # Include interaction in reproducibility bucket (common in practice)
+    var_repro_total = var_repro_main + var_int
     var_part = max((ms_part - ms_int) / (ops * repeats), 0.0)
 
     var_grr = var_repeat + var_repro_total
     var_total = var_grr + var_part
 
-    def pct(v): 
+    def pct(v: float) -> float:
         return 100.0 * (v / var_total) if var_total > 0 else float("nan")
 
     return GRRResult(

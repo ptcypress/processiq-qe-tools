@@ -11,8 +11,14 @@ set_page("Control Charts", icon="📈")
 st.title("Control Charts")
 st.caption("I‑MR, Xbar‑R, and p-chart for quick stability checks.")
 
-from processiq.state import get_df, clear_df
-shared_df, shared_name = get_df()
+from processiq.shared import get_working_df
+df, name = get_working_df()
+if df is None:
+    warn_empty("Upload a dataset in this page OR load one in Data Explorer and check 'Use shared dataset'.")
+    st.stop()
+
+df_preview(df)
+
 
 use_shared = False
 if shared_df is not None:

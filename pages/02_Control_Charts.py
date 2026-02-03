@@ -5,7 +5,7 @@ import pandas as pd
 from processiq.ui import set_page, df_preview, warn_empty
 from processiq.data import load_table, infer_numeric_columns, coerce_numeric
 from processiq.spc import imr, xbar_r, p_chart, nelson_rules_1_2_3_4, imr_sigma_from_mrbar
-from process.shared import get_working_df
+from processiq.shared import get_working_df
 
 set_page("Control Charts", icon="📈")
 

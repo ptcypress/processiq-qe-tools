@@ -75,9 +75,19 @@ kpi_row([
     ("Pp", f"{res.pp:.3f}" if res.pp is not None else "—"),
     ("Ppk", f"{res.ppk:.3f}" if res.ppk is not None else "—"),
 ])
+oos = 0
+if lsl is not None:
+    oos += int((x < lsl).sum())
+if usl is not None:
+    oos += int((x > usl).sum())
+obs_ppm = (oos / len(x)) * 1_000_000 if len(x) else float("nan")
 
 st.divider()
 fig = px.histogram(x.to_frame(name=col), x=col, nbins=40, marginal="box")
+if lsl is not None:
+    fig.add_vline(x=lsl, line_dash="dot", annotation_text="LSL")
+if usl is not None:
+    fig.add_vline(x=usl, line_dash="dot", annotation_text="USL")
 st.plotly_chart(fig, use_container_width=True)
 
 if do_norm and len(x) >= 8:
@@ -87,3 +97,31 @@ if do_norm and len(x) >= 8:
     st.write("Critical values (for normal):")
     st.dataframe({"significance_%": ad.significance_level, "critical_value": ad.critical_values}, use_container_width=True)
     st.caption("Rule of thumb: if AD statistic > critical value at a chosen significance level, reject normality.")
+
+exp_ppm = None
+if res.stdev_overall is not None and res.stdev_overall > 0:
+    from scipy.stats import norm
+    mu = res.mean
+    s = res.stdev_overall
+    p_low = norm.cdf(lsl, loc=mu, scale=s) if lsl is not None else 0.0
+    p_high = 1 - norm.cdf(usl, loc=mu, scale=s) if usl is not None else 0.0
+    exp_ppm = (p_low + p_high) * 1_000_000
+
+score = res.ppk if res.ppk is not None else res.cpk
+label = "—"
+if score is not None:
+    if score >= 1.33:
+        label = "PASS (≥ 1.33)"
+    elif score >= 1.00:
+        label = "BORDERLINE (1.00–1.33)"
+    else:
+        label = "FAIL (< 1.00)"
+
+kpi_row([
+    ("Decision", label),
+    ("Observed OOS", f"{oos}"),
+    ("Observed PPM", f"{obs_ppm:,.0f}" if np.isfinite(obs_ppm) else "—"),
+    ("Expected PPM (normal)", f"{exp_ppm:,.0f}" if exp_ppm is not None else "—"),
+])
+
+

@@ -42,10 +42,17 @@ def gage_rr_crossed_anova(df: pd.DataFrame, part_col: str, op_col: str, y_col: s
     model = smf.ols(f"{y_col} ~ C({part_col}) + C({op_col}) + C({part_col}):C({op_col})", data=d).fit()
     aov = sm.stats.anova_lm(model, typ=2)
 
+    
+
+    # statsmodels ANOVA table doesn't always include mean_sq; compute it
+    aov = aov.copy()
+    aov["mean_sq"] = aov["sum_sq"] / aov["df"]
+
     ms_part = float(aov.loc[f"C({part_col})", "mean_sq"])
-    ms_op = float(aov.loc[f"C({op_col})", "mean_sq"])
-    ms_int = float(aov.loc[f"C({part_col}):C({op_col})", "mean_sq"])
-    ms_err = float(aov.loc["Residual", "mean_sq"])
+    ms_op   = float(aov.loc[f"C({op_col})", "mean_sq"])
+    ms_int  = float(aov.loc[f"C({part_col}):C({op_col})", "mean_sq"])
+    ms_err  = float(aov.loc["Residual", "mean_sq"])
+
 
     # Variance components (common GR&R approximation):
     var_repeat = ms_err

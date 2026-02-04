@@ -139,6 +139,18 @@ def fig_to_html(fig) -> str:
     # Use CDN to keep file small
     return pio.to_html(fig, include_plotlyjs="cdn", full_html=False)
 
+def apply_plotly_report_theme(fig):
+    if fig is None:
+        return fig
+    try:
+        fig.update_layout(
+            template="plotly_white",
+            font=dict(family="Arial", size=12),
+            margin=dict(l=40, r=20, t=50, b=40),
+        )
+    except Exception:
+        pass
+    return fig
 
 @dataclass
 class Report:
@@ -169,6 +181,7 @@ class Report:
         )
 
     def add_figure(self, heading: str, fig) -> None:
+        fig = apply_plotly_report_theme(fig)
         self.sections.append(f"<h2>{_escape(heading)}</h2>{fig_to_html(fig)}")
 
     def add_table(self, heading: str, df: pd.DataFrame) -> None:

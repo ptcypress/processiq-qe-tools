@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 import numpy as np
-import pandas as pd
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 
 from processiq.ui import set_page, df_preview, warn_empty, kpi_row
-from processiq.data import infer_numeric_columns, coerce_numeric
+from processiq.data import coerce_numeric
 from processiq.shared import get_working_df
+from processiq.columns import numeric_like_columns
 
 
 def _parse_optional_float(s: str | None) -> float | None:
@@ -29,8 +29,10 @@ def _mr_within_sigma(x: np.ndarray) -> float | None:
     if x.size < 2:
         return None
     mr = np.abs(np.diff(x))
-    mrbar = float(np.mean(mr)) if mr.size else None
-    if mrbar is None or not np.isfinite(mrbar) or mrbar <= 0:
+    if mr.size == 0:
+        return None
+    mrbar = float(np.mean(mr))
+    if not np.isfinite(mrbar) or mrbar <= 0:
         return None
     return mrbar / 1.128
 
@@ -66,7 +68,8 @@ def _ppm_expected_normal(mean: float, s: float, lsl: float | None, usl: float | 
 set_page("Process Capability", icon="🎯")
 
 st.title("Process Capability")
-st.caption("Histogram + capability indices (Cp/Cpk and Pp/Ppk) with optional Target/Nominal line.")
+st.caption("Histogram + capability indices (Cp/Cpk and Pp/Ppk) with optional Target line.")
+st.caption("Only numeric-like columns are shown.")
 
 # ---- Data source (shared or upload) ----
 df, name = get_working_df(key_prefix="capability")
@@ -78,12 +81,12 @@ df_preview(df)
 
 st.divider()
 
-numeric_cols = infer_numeric_columns(df)
-if not numeric_cols:
-    st.warning("No numeric-like columns detected.")
+num_cols = numeric_like_columns(df)
+if not num_cols:
+    st.warning("No numeric-like columns detected for capability.")
     st.stop()
 
-col = st.selectbox("Measurement column", numeric_cols)
+col = st.selectbox("Measurement column", num_cols, key="cap_col")
 
 x_series = coerce_numeric(df[col]).dropna()
 x = x_series.to_numpy()
@@ -94,18 +97,18 @@ if x.size < 5:
 # ---- Spec + target inputs ----
 c1, c2, c3 = st.columns(3)
 with c1:
-    lsl_in = st.text_input("LSL (optional)", value="")
+    lsl_in = st.text_input("LSL (optional)", value="", key="cap_lsl")
 with c2:
-    usl_in = st.text_input("USL (optional)", value="")
+    usl_in = st.text_input("USL (optional)", value="", key="cap_usl")
 with c3:
-    tgt_in = st.text_input("Target / Nominal (optional)", value="")
+    tgt_in = st.text_input("Target / Nominal (optional)", value="", key="cap_tgt")
 
 lsl = _parse_optional_float(lsl_in)
 usl = _parse_optional_float(usl_in)
 
 target = _parse_optional_float(tgt_in)
 if target is None and (lsl is not None and usl is not None):
-    target = (lsl + usl) / 2.0  # auto-midpoint fallback
+    target = (lsl + usl) / 2.0  # fallback midpoint if blank
 
 # ---- Stats ----
 mean = float(np.mean(x))
@@ -128,7 +131,7 @@ obs_ppm = (oos / x.size) * 1_000_000
 # Expected PPM (normal, overall sigma)
 exp_ppm = _ppm_expected_normal(mean, stdev_overall, lsl, usl)
 
-# Decision label (based on Ppk if available, else Cpk)
+# Decision label
 score = ppk if ppk is not None else cpk
 label = "—"
 if score is not None and np.isfinite(score):
@@ -167,10 +170,29 @@ kpi_row(
     ]
 )
 
+# ---- Interpretation ----
+st.subheader("Interpretation")
+if target is not None:
+    offset = mean - target
+    st.info(f"Centering: Mean − Target = {offset:+.4g} (Target line is shown on the chart).")
+else:
+    st.info("Centering: No target provided. (If you enter LSL & USL and leave Target blank, midpoint is used.)")
+
+if label.startswith("PASS"):
+    st.success("Capability: looks capable. (Assuming process is stable.)")
+elif label.startswith("BORDERLINE"):
+    st.warning("Capability: borderline. Risk depends on cost/criticality and tail behavior.")
+elif label.startswith("FAIL"):
+    st.error("Capability: not capable. Reduce variation and/or re-center.")
+else:
+    st.caption("Capability indices require at least one spec limit and valid variation estimates.")
+
+st.caption("Reminder: If the process is not stable, capability numbers can be misleading.")
+
 # ---- Plot ----
 st.subheader("Histogram with normal curves")
 
-nbins = st.slider("Bins", min_value=10, max_value=80, value=30, step=1)
+nbins = st.slider("Bins", min_value=10, max_value=80, value=30, step=1, key="cap_bins")
 
 fig = px.histogram(x, nbins=nbins, histnorm="probability density")
 fig.update_layout(xaxis_title=col, yaxis_title="Density")
@@ -182,38 +204,23 @@ if usl is not None:
     fig.add_vline(x=usl, line_dash="dot", annotation_text="USL", annotation_position="top")
 
 # Mean + Target lines
-fig.add_vline(
-    x=mean,
-    line_dash="dash",
-    annotation_text="Mean",
-    annotation_position="top",
-)
-
+fig.add_vline(x=mean, line_dash="dash", annotation_text="Mean", annotation_position="top")
 if target is not None:
-    fig.add_vline(
-        x=target,
-        line_dash="solid",
-        annotation_text="Target",
-        annotation_position="top",
-    )
+    fig.add_vline(x=target, line_dash="solid", annotation_text="Target", annotation_position="top")
 
 # Normal curves
 xx = np.linspace(float(np.min(x)), float(np.max(x)), 300)
-
 try:
     from scipy.stats import norm  # type: ignore
 
-    # Overall curve
     yy_overall = norm.pdf(xx, loc=mean, scale=stdev_overall)
     fig.add_trace(go.Scatter(x=xx, y=yy_overall, mode="lines", name="Overall normal"))
 
-    # Within curve (if available)
     if stdev_within is not None and stdev_within > 0:
         yy_within = norm.pdf(xx, loc=mean, scale=stdev_within)
         fig.add_trace(go.Scatter(x=xx, y=yy_within, mode="lines", name="Within normal", line=dict(dash="dash")))
-
 except Exception:
-    st.info("Normal curve overlay requires scipy. (Histogram + capability indices still valid.)")
+    st.info("Normal curve overlay requires scipy. (Histogram + indices still valid.)")
 
 st.plotly_chart(fig, use_container_width=True)
 

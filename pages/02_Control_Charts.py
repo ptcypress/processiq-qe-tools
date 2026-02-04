@@ -22,6 +22,7 @@ from processiq.columns import (
     subgroup_columns_xbarr,
 )
 from processiq.reporting import Report
+from processiq.report_builder import ReportSection, add_section
 
 set_page("Control Charts", icon="📈")
 
@@ -49,6 +50,8 @@ report_figs: list[tuple[str, object]] = []
 report_tables: list[tuple[str, pd.DataFrame]] = []
 report_inputs: list[str] = []
 report_interp: list[str] = []
+badge_text: str | None = None
+badge_level: str = "success"
 
 # ========================= I-MR =========================
 if chart_type == "I-MR (Individuals)":
@@ -69,17 +72,23 @@ if chart_type == "I-MR (Individuals)":
     viol = nelson_rules_1_2_3_4(dd["X"], center=xline.center, sigma=sigma if sigma else float("nan"))
     viol_idx = set(viol["index"].astype(int).tolist()) if len(viol) else set()
 
-    report_inputs.append(f"<b>Chart:</b> I-MR")
-    report_inputs.append(f"<b>Measurement:</b> {col}")
+    report_inputs += [
+        "<b>Chart:</b> I-MR",
+        f"<b>Measurement:</b> {col}",
+    ]
 
     if len(viol):
         st.error(f"Unstable: {len(viol)} run rule violation(s) detected. Investigate special cause before capability.")
         rule_counts = viol["rule"].value_counts().to_dict()
         st.caption("Rule counts: " + ", ".join([f"{k}={v}" for k, v in rule_counts.items()]))
         report_interp.append(f"Unstable: {len(viol)} run rule violation(s) detected (R1–R4).")
+        badge_text = f"Stability: UNSTABLE ({len(viol)} violation(s))"
+        badge_level = "error"
     else:
         st.success("Stable: no run rule violations detected (R1–R4).")
         report_interp.append("Stable: no run rule violations detected (R1–R4).")
+        badge_text = "Stability: STABLE (no violations)"
+        badge_level = "success"
 
     # Individuals chart
     fig1 = go.Figure()
@@ -149,9 +158,13 @@ elif chart_type == "Xbar-R (Subgroup)":
     out, xbar_line, r_line, n = xbar_r(df, value_col=value_col, subgroup_col=subgroup_col)
     st.caption(f"Detected subgroup size: n = {n}")
 
-    report_inputs.append(f"<b>Chart:</b> Xbar-R")
-    report_inputs.append(f"<b>Measurement:</b> {value_col}")
-    report_inputs.append(f"<b>Subgroup:</b> {subgroup_col} (n={n})")
+    report_inputs += [
+        "<b>Chart:</b> Xbar-R",
+        f"<b>Measurement:</b> {value_col}",
+        f"<b>Subgroup:</b> {subgroup_col} (n={n})",
+    ]
+    badge_text = "Xbar-R chart generated (interpret stability visually)"
+    badge_level = "warn"
 
     fig1 = go.Figure()
     fig1.add_trace(go.Scatter(y=out["Xbar"], mode="lines+markers", name="Xbar"))
@@ -188,9 +201,13 @@ elif chart_type == "p-chart (Attribute)":
 
     out, pbar = p_chart(df, defect_col=defect_col, n_col=n_col)
 
-    report_inputs.append(f"<b>Chart:</b> p-chart")
-    report_inputs.append(f"<b>Defectives:</b> {defect_col}")
-    report_inputs.append(f"<b>n:</b> {n_col}")
+    report_inputs += [
+        "<b>Chart:</b> p-chart",
+        f"<b>Defectives:</b> {defect_col}",
+        f"<b>n:</b> {n_col}",
+    ]
+    badge_text = "p-chart generated (interpret stability visually)"
+    badge_level = "warn"
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(y=out["p"], mode="lines+markers", name="p"))
@@ -233,9 +250,13 @@ elif chart_type == "np-chart":
     d["UCL"] = (npbar + 3 * sigma).clip(lower=0)
     d["LCL"] = (npbar - 3 * sigma).clip(lower=0)
 
-    report_inputs.append(f"<b>Chart:</b> np-chart")
-    report_inputs.append(f"<b>Defectives:</b> {defect_col}")
-    report_inputs.append(f"<b>n:</b> {n_col}")
+    report_inputs += [
+        "<b>Chart:</b> np-chart",
+        f"<b>Defectives:</b> {defect_col}",
+        f"<b>n:</b> {n_col}",
+    ]
+    badge_text = "np-chart generated (interpret stability visually)"
+    badge_level = "warn"
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(y=d["np"], mode="lines+markers", name="np"))
@@ -263,8 +284,12 @@ elif chart_type == "c-chart":
     ucl = cbar + 3 * (cbar**0.5)
     lcl = max(cbar - 3 * (cbar**0.5), 0.0)
 
-    report_inputs.append(f"<b>Chart:</b> c-chart")
-    report_inputs.append(f"<b>Defects:</b> {c_col}")
+    report_inputs += [
+        "<b>Chart:</b> c-chart",
+        f"<b>Defects:</b> {c_col}",
+    ]
+    badge_text = "c-chart generated (interpret stability visually)"
+    badge_level = "warn"
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(y=c, mode="lines+markers", name="c"))
@@ -307,9 +332,13 @@ elif chart_type == "u-chart":
     d["UCL"] = ubar + 3 * se
     d["LCL"] = (ubar - 3 * se).clip(lower=0.0)
 
-    report_inputs.append(f"<b>Chart:</b> u-chart")
-    report_inputs.append(f"<b>Defects:</b> {c_col}")
-    report_inputs.append(f"<b>Units/area:</b> {n_col}")
+    report_inputs += [
+        "<b>Chart:</b> u-chart",
+        f"<b>Defects:</b> {c_col}",
+        f"<b>Units/area:</b> {n_col}",
+    ]
+    badge_text = "u-chart generated (interpret stability visually)"
+    badge_level = "warn"
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(y=d["u"], mode="lines+markers", name="u"))
@@ -321,9 +350,9 @@ elif chart_type == "u-chart":
 
     report_figs.append(("u-chart", fig))
 
-# ---- Report export (works for any chart type) ----
+# ---- Export report + Add to builder ----
 st.divider()
-st.subheader("Export report")
+st.subheader("Export / Add to Report Builder")
 
 rep = Report(
     title="ProcessIQ Report — Control Charts",
@@ -334,18 +363,41 @@ rep = Report(
 rep.add_card("Inputs", "<br/>".join(report_inputs) if report_inputs else f"<b>Chart:</b> {chart_type}")
 if report_interp:
     rep.add_card("Interpretation", "<br/>".join(report_interp))
+if badge_text:
+    rep.add_badge("Status", badge_text, level=badge_level)
 
 for title, fig in report_figs:
     rep.add_figure(title, fig)
-
 for title, table in report_tables:
     rep.add_table(title, table)
 
-html = rep.render_html().encode("utf-8")
-st.download_button(
-    "Download HTML report",
-    data=html,
-    file_name=rep.file_name("processiq_control_charts_report"),
-    mime="text/html",
-    use_container_width=True,
-)
+colA, colB = st.columns(2)
+
+with colA:
+    html = rep.render_html().encode("utf-8")
+    st.download_button(
+        "Download HTML report",
+        data=html,
+        file_name=rep.file_name("processiq_control_charts_report"),
+        mime="text/html",
+        use_container_width=True,
+        key="cc_dl_html",
+    )
+
+with colB:
+    if st.button("Add to Report Builder", use_container_width=True, key="cc_add_rb"):
+        add_section(
+            ReportSection(
+                tool="Control Charts",
+                subtitle=chart_type,
+                dataset_name=dataset_name or "(unknown)",
+                inputs_html="<br/>".join(report_inputs) if report_inputs else f"<b>Chart:</b> {chart_type}",
+                interpretation_html="<br/>".join(report_interp) if report_interp else "",
+                kpis=[],  # keep v1 simple for control charts
+                badge_text=badge_text,
+                badge_level=badge_level,
+                figures=report_figs,
+                tables=report_tables,
+            )
+        )
+        st.success("Added Control Charts section to Report Builder.")

@@ -6,7 +6,7 @@ import pandas as pd
 import plotly.graph_objects as go
 
 from processiq.ui import set_page, df_preview, warn_empty
-from processiq.data import infer_numeric_columns, coerce_numeric
+from processiq.data import coerce_numeric
 from processiq.spc import (
     imr,
     xbar_r,
@@ -15,11 +15,18 @@ from processiq.spc import (
     imr_sigma_from_mrbar,
 )
 from processiq.shared import get_working_df
+from processiq.columns import (
+    numeric_like_columns,
+    count_like_columns,
+    positive_numeric_like_columns,
+    subgroup_columns_xbarr,
+)
 
 set_page("Control Charts", icon="📈")
 
 st.title("Control Charts")
 st.caption("I-MR, Xbar-R, and attribute charts for quick stability checks.")
+st.caption("Only compatible columns are shown for each chart type.")
 
 # ---- Data source (shared or upload) ----
 df, name = get_working_df(key_prefix="control_charts")
@@ -43,19 +50,31 @@ st.divider()
 # I-MR
 # =========================
 if chart_type == "I-MR (Individuals)":
-    numeric_cols = infer_numeric_columns(df)
-    if not numeric_cols:
-        st.warning("No numeric-like columns detected.")
+    num_cols = numeric_like_columns(df)
+    if not num_cols:
+        st.warning("No numeric-like columns detected for I-MR.")
         st.stop()
 
-    col = st.selectbox("Measurement column", numeric_cols)
+    col = st.selectbox("Measurement column", num_cols, key="cc_imr_col")
     x = coerce_numeric(df[col]).dropna()
+
+    if len(x) < 3:
+        st.warning("Not enough numeric data points for I-MR (need at least 3).")
+        st.stop()
 
     dd, xline, mrline = imr(x)
 
     sigma = imr_sigma_from_mrbar(mrline.center)
     viol = nelson_rules_1_2_3_4(dd["X"], center=xline.center, sigma=sigma if sigma else float("nan"))
     viol_idx = set(viol["index"].astype(int).tolist()) if len(viol) else set()
+
+    # Interpretation
+    if len(viol):
+        st.error(f"Unstable: {len(viol)} run rule violation(s) detected. Investigate special cause before capability.")
+        rule_counts = viol["rule"].value_counts().to_dict()
+        st.caption("Rule counts: " + ", ".join([f"{k}={v}" for k, v in rule_counts.items()]))
+    else:
+        st.success("Stable: no run rule violations detected (R1–R4).")
 
     # Individuals chart
     fig1 = go.Figure()
@@ -115,20 +134,25 @@ if chart_type == "I-MR (Individuals)":
 # Xbar-R
 # =========================
 elif chart_type == "Xbar-R (Subgroup)":
-    numeric_cols = infer_numeric_columns(df)
-    if not numeric_cols:
-        st.warning("No numeric-like columns detected.")
+    value_cols = numeric_like_columns(df)
+    group_cols = subgroup_columns_xbarr(df)
+
+    if not value_cols:
+        st.warning("No numeric-like measurement columns found for Xbar-R.")
         st.stop()
 
-    value_col = st.selectbox("Measurement column", numeric_cols)
-    subgroup_col = st.selectbox("Subgroup column", df.columns.tolist())
+    if not group_cols:
+        st.warning("No valid subgroup columns found (need consistent subgroup sizes 2..10).")
+        st.stop()
 
-    # NOTE: xbar_r expects the full df + column names
+    value_col = st.selectbox("Measurement column", value_cols, key="cc_xbarr_val")
+    subgroup_col = st.selectbox("Subgroup column", group_cols, key="cc_xbarr_grp")
+
+    # xbar_r expects the full df + column names (per your ProcessIQ spc.py)
     out, xbar_line, r_line, n = xbar_r(df, value_col=value_col, subgroup_col=subgroup_col)
 
-    st.caption(f"Detected subgroup size (mode): n = {n}")
+    st.caption(f"Detected subgroup size: n = {n}")
 
-    # Xbar chart
     fig1 = go.Figure()
     fig1.add_trace(go.Scatter(y=out["Xbar"], mode="lines+markers", name="Xbar"))
     fig1.add_hline(y=xbar_line.center, line_dash="dash", annotation_text="CL")
@@ -137,7 +161,6 @@ elif chart_type == "Xbar-R (Subgroup)":
     fig1.update_layout(title="Xbar Chart", xaxis_title="Subgroup order", yaxis_title=f"Mean({value_col})")
     st.plotly_chart(fig1, use_container_width=True)
 
-    # R chart
     fig2 = go.Figure()
     fig2.add_trace(go.Scatter(y=out["R"], mode="lines+markers", name="R"))
     fig2.add_hline(y=r_line.center, line_dash="dash", annotation_text="CL")
@@ -147,15 +170,23 @@ elif chart_type == "Xbar-R (Subgroup)":
     st.plotly_chart(fig2, use_container_width=True)
 
 
-
 # =========================
 # p-chart
 # =========================
 elif chart_type == "p-chart (Attribute)":
-    defect_col = st.selectbox("Defectives column (count)", df.columns.tolist())
-    n_col = st.selectbox("Sample size column (n)", df.columns.tolist())
+    count_cols = count_like_columns(df)
+    n_cols = positive_numeric_like_columns(df)
 
-    # NOTE: p_chart expects the full df + column names
+    if not count_cols:
+        st.warning("No count-like columns found for defectives.")
+        st.stop()
+    if not n_cols:
+        st.warning("No positive numeric-like columns found for sample size n.")
+        st.stop()
+
+    defect_col = st.selectbox("Defectives column (count)", count_cols, key="cc_p_def")
+    n_col = st.selectbox("Sample size column (n)", n_cols, key="cc_p_n")
+
     out, pbar = p_chart(df, defect_col=defect_col, n_col=n_col)
 
     fig = go.Figure()
@@ -163,24 +194,35 @@ elif chart_type == "p-chart (Attribute)":
     fig.add_trace(go.Scatter(y=out["UCL"], mode="lines", name="UCL"))
     fig.add_trace(go.Scatter(y=out["LCL"], mode="lines", name="LCL"))
     fig.add_hline(y=pbar, line_dash="dash", annotation_text="CL")
-
     fig.update_layout(title="p-chart", xaxis_title="Order", yaxis_title="Fraction defective")
     st.plotly_chart(fig, use_container_width=True)
 
+
 # =========================
-# np-chart
+# np-chart (counts)
 # =========================
 elif chart_type == "np-chart":
-    defect_col = st.selectbox("Defectives column (count)", df.columns.tolist())
-    n_col = st.selectbox("Sample size column (n)", df.columns.tolist())
+    count_cols = count_like_columns(df)
+    n_cols = positive_numeric_like_columns(df)
+
+    if not count_cols:
+        st.warning("No count-like columns found for defectives.")
+        st.stop()
+    if not n_cols:
+        st.warning("No positive numeric-like columns found for sample size n.")
+        st.stop()
+
+    defect_col = st.selectbox("Defectives column (count)", count_cols, key="cc_np_def")
+    n_col = st.selectbox("Sample size column (n)", n_cols, key="cc_np_n")
 
     d = df[[defect_col, n_col]].copy()
     d[defect_col] = pd.to_numeric(d[defect_col], errors="coerce")
     d[n_col] = pd.to_numeric(d[n_col], errors="coerce")
     d = d.dropna()
+    d = d[(d[n_col] > 0) & (d[defect_col] >= 0)]
 
     if d.empty:
-        st.error("No valid rows after cleaning. Check column selections.")
+        st.warning("No valid rows after cleaning.")
         st.stop()
 
     pbar = d[defect_col].sum() / d[n_col].sum()
@@ -200,14 +242,19 @@ elif chart_type == "np-chart":
 
 
 # =========================
-# c-chart
+# c-chart (defects per unit, constant opportunity)
 # =========================
 elif chart_type == "c-chart":
-    c_col = st.selectbox("Defects column (count)", df.columns.tolist())
+    count_cols = count_like_columns(df)
+    if not count_cols:
+        st.warning("No count-like columns found for c-chart.")
+        st.stop()
+
+    c_col = st.selectbox("Defects column (count)", count_cols, key="cc_c_col")
     c = pd.to_numeric(df[c_col], errors="coerce").dropna().reset_index(drop=True)
 
     if c.empty:
-        st.error("No valid rows after cleaning. Check column selection.")
+        st.warning("No valid rows after cleaning.")
         st.stop()
 
     cbar = float(c.mean())
@@ -224,19 +271,30 @@ elif chart_type == "c-chart":
 
 
 # =========================
-# u-chart
+# u-chart (defects per unit, varying opportunity)
 # =========================
 elif chart_type == "u-chart":
-    c_col = st.selectbox("Defects column (count)", df.columns.tolist())
-    n_col = st.selectbox("Units/area column (n)", df.columns.tolist())
+    count_cols = count_like_columns(df)
+    n_cols = positive_numeric_like_columns(df)
+
+    if not count_cols:
+        st.warning("No count-like columns found for defects.")
+        st.stop()
+    if not n_cols:
+        st.warning("No positive numeric-like columns found for units/area (n).")
+        st.stop()
+
+    c_col = st.selectbox("Defects column (count)", count_cols, key="cc_u_c")
+    n_col = st.selectbox("Units/area column (n)", n_cols, key="cc_u_n")
 
     d = df[[c_col, n_col]].copy()
     d[c_col] = pd.to_numeric(d[c_col], errors="coerce")
     d[n_col] = pd.to_numeric(d[n_col], errors="coerce")
     d = d.dropna()
+    d = d[(d[n_col] > 0) & (d[c_col] >= 0)]
 
     if d.empty:
-        st.error("No valid rows after cleaning. Check column selections.")
+        st.warning("No valid rows after cleaning.")
         st.stop()
 
     u = d[c_col] / d[n_col]

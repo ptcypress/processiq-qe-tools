@@ -21,6 +21,7 @@ from processiq.columns import (
     positive_numeric_like_columns,
     subgroup_columns_xbarr,
 )
+from processiq.reporting import Report
 
 set_page("Control Charts", icon="📈")
 
@@ -28,14 +29,12 @@ st.title("Control Charts")
 st.caption("I-MR, Xbar-R, and attribute charts for quick stability checks.")
 st.caption("Only compatible columns are shown for each chart type.")
 
-# ---- Data source (shared or upload) ----
-df, name = get_working_df(key_prefix="control_charts")
+df, dataset_name = get_working_df(key_prefix="control_charts")
 if df is None:
     warn_empty("Upload a dataset here OR load one in Data Explorer and use the shared dataset.")
     st.stop()
 
 df_preview(df)
-
 st.divider()
 
 chart_type = st.radio(
@@ -46,9 +45,12 @@ chart_type = st.radio(
 
 st.divider()
 
-# =========================
-# I-MR
-# =========================
+report_figs: list[tuple[str, object]] = []
+report_tables: list[tuple[str, pd.DataFrame]] = []
+report_inputs: list[str] = []
+report_interp: list[str] = []
+
+# ========================= I-MR =========================
 if chart_type == "I-MR (Individuals)":
     num_cols = numeric_like_columns(df)
     if not num_cols:
@@ -63,18 +65,21 @@ if chart_type == "I-MR (Individuals)":
         st.stop()
 
     dd, xline, mrline = imr(x)
-
     sigma = imr_sigma_from_mrbar(mrline.center)
     viol = nelson_rules_1_2_3_4(dd["X"], center=xline.center, sigma=sigma if sigma else float("nan"))
     viol_idx = set(viol["index"].astype(int).tolist()) if len(viol) else set()
 
-    # Interpretation
+    report_inputs.append(f"<b>Chart:</b> I-MR")
+    report_inputs.append(f"<b>Measurement:</b> {col}")
+
     if len(viol):
         st.error(f"Unstable: {len(viol)} run rule violation(s) detected. Investigate special cause before capability.")
         rule_counts = viol["rule"].value_counts().to_dict()
         st.caption("Rule counts: " + ", ".join([f"{k}={v}" for k, v in rule_counts.items()]))
+        report_interp.append(f"Unstable: {len(viol)} run rule violation(s) detected (R1–R4).")
     else:
         st.success("Stable: no run rule violations detected (R1–R4).")
+        report_interp.append("Stable: no run rule violations detected (R1–R4).")
 
     # Individuals chart
     fig1 = go.Figure()
@@ -84,29 +89,24 @@ if chart_type == "I-MR (Individuals)":
     xvals = list(range(len(yvals)))
     flag_mask = [i in viol_idx for i in xvals]
 
-    fig1.add_trace(
-        go.Scatter(
-            x=[xvals[i] for i in range(len(xvals)) if not flag_mask[i]],
-            y=[yvals[i] for i in range(len(yvals)) if not flag_mask[i]],
-            mode="markers",
-            name="In-control pts",
-        )
-    )
-    fig1.add_trace(
-        go.Scatter(
-            x=[xvals[i] for i in range(len(xvals)) if flag_mask[i]],
-            y=[yvals[i] for i in range(len(yvals)) if flag_mask[i]],
-            mode="markers",
-            name="Rule violations",
-        )
-    )
+    fig1.add_trace(go.Scatter(
+        x=[xvals[i] for i in range(len(xvals)) if not flag_mask[i]],
+        y=[yvals[i] for i in range(len(yvals)) if not flag_mask[i]],
+        mode="markers",
+        name="In-control pts",
+    ))
+    fig1.add_trace(go.Scatter(
+        x=[xvals[i] for i in range(len(xvals)) if flag_mask[i]],
+        y=[yvals[i] for i in range(len(yvals)) if flag_mask[i]],
+        mode="markers",
+        name="Rule violations",
+    ))
 
     fig1.add_hline(y=xline.center, line_dash="dash", annotation_text="CL")
     if xline.ucl is not None:
         fig1.add_hline(y=xline.ucl, line_dash="dot", annotation_text="UCL")
     if xline.lcl is not None:
         fig1.add_hline(y=xline.lcl, line_dash="dot", annotation_text="LCL")
-
     fig1.update_layout(title="Individuals (I) Chart", xaxis_title="Order", yaxis_title=col)
     st.plotly_chart(fig1, use_container_width=True)
 
@@ -118,21 +118,20 @@ if chart_type == "I-MR (Individuals)":
         fig2.add_hline(y=mrline.ucl, line_dash="dot", annotation_text="UCL")
     if mrline.lcl is not None:
         fig2.add_hline(y=mrline.lcl, line_dash="dot", annotation_text="LCL")
-
     fig2.update_layout(title="Moving Range (MR) Chart", xaxis_title="Order", yaxis_title="MR")
     st.plotly_chart(fig2, use_container_width=True)
 
-    # Violations table (once)
     st.subheader("Run rule violations")
     if len(viol):
         st.dataframe(viol, use_container_width=True)
     else:
         st.write("No Nelson rule violations detected (R1–R4).")
 
+    report_figs += [("Individuals (I) Chart", fig1), ("Moving Range (MR) Chart", fig2)]
+    if len(viol):
+        report_tables.append(("Run rule violations", viol))
 
-# =========================
-# Xbar-R
-# =========================
+# ========================= Xbar-R =========================
 elif chart_type == "Xbar-R (Subgroup)":
     value_cols = numeric_like_columns(df)
     group_cols = subgroup_columns_xbarr(df)
@@ -140,7 +139,6 @@ elif chart_type == "Xbar-R (Subgroup)":
     if not value_cols:
         st.warning("No numeric-like measurement columns found for Xbar-R.")
         st.stop()
-
     if not group_cols:
         st.warning("No valid subgroup columns found (need consistent subgroup sizes 2..10).")
         st.stop()
@@ -148,10 +146,12 @@ elif chart_type == "Xbar-R (Subgroup)":
     value_col = st.selectbox("Measurement column", value_cols, key="cc_xbarr_val")
     subgroup_col = st.selectbox("Subgroup column", group_cols, key="cc_xbarr_grp")
 
-    # xbar_r expects the full df + column names (per your ProcessIQ spc.py)
     out, xbar_line, r_line, n = xbar_r(df, value_col=value_col, subgroup_col=subgroup_col)
-
     st.caption(f"Detected subgroup size: n = {n}")
+
+    report_inputs.append(f"<b>Chart:</b> Xbar-R")
+    report_inputs.append(f"<b>Measurement:</b> {value_col}")
+    report_inputs.append(f"<b>Subgroup:</b> {subgroup_col} (n={n})")
 
     fig1 = go.Figure()
     fig1.add_trace(go.Scatter(y=out["Xbar"], mode="lines+markers", name="Xbar"))
@@ -169,10 +169,9 @@ elif chart_type == "Xbar-R (Subgroup)":
     fig2.update_layout(title="R Chart", xaxis_title="Subgroup order", yaxis_title="Range")
     st.plotly_chart(fig2, use_container_width=True)
 
+    report_figs += [("Xbar Chart", fig1), ("R Chart", fig2)]
 
-# =========================
-# p-chart
-# =========================
+# ========================= p-chart =========================
 elif chart_type == "p-chart (Attribute)":
     count_cols = count_like_columns(df)
     n_cols = positive_numeric_like_columns(df)
@@ -189,6 +188,10 @@ elif chart_type == "p-chart (Attribute)":
 
     out, pbar = p_chart(df, defect_col=defect_col, n_col=n_col)
 
+    report_inputs.append(f"<b>Chart:</b> p-chart")
+    report_inputs.append(f"<b>Defectives:</b> {defect_col}")
+    report_inputs.append(f"<b>n:</b> {n_col}")
+
     fig = go.Figure()
     fig.add_trace(go.Scatter(y=out["p"], mode="lines+markers", name="p"))
     fig.add_trace(go.Scatter(y=out["UCL"], mode="lines", name="UCL"))
@@ -197,10 +200,9 @@ elif chart_type == "p-chart (Attribute)":
     fig.update_layout(title="p-chart", xaxis_title="Order", yaxis_title="Fraction defective")
     st.plotly_chart(fig, use_container_width=True)
 
+    report_figs.append(("p-chart", fig))
 
-# =========================
-# np-chart (counts)
-# =========================
+# ========================= np-chart =========================
 elif chart_type == "np-chart":
     count_cols = count_like_columns(df)
     n_cols = positive_numeric_like_columns(df)
@@ -220,7 +222,6 @@ elif chart_type == "np-chart":
     d[n_col] = pd.to_numeric(d[n_col], errors="coerce")
     d = d.dropna()
     d = d[(d[n_col] > 0) & (d[defect_col] >= 0)]
-
     if d.empty:
         st.warning("No valid rows after cleaning.")
         st.stop()
@@ -228,10 +229,13 @@ elif chart_type == "np-chart":
     pbar = d[defect_col].sum() / d[n_col].sum()
     npbar = pbar * d[n_col]
     sigma = (d[n_col] * pbar * (1 - pbar)) ** 0.5
-
     d["np"] = d[defect_col]
     d["UCL"] = (npbar + 3 * sigma).clip(lower=0)
     d["LCL"] = (npbar - 3 * sigma).clip(lower=0)
+
+    report_inputs.append(f"<b>Chart:</b> np-chart")
+    report_inputs.append(f"<b>Defectives:</b> {defect_col}")
+    report_inputs.append(f"<b>n:</b> {n_col}")
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(y=d["np"], mode="lines+markers", name="np"))
@@ -240,10 +244,9 @@ elif chart_type == "np-chart":
     fig.update_layout(title="np-chart", xaxis_title="Order", yaxis_title="Number defective")
     st.plotly_chart(fig, use_container_width=True)
 
+    report_figs.append(("np-chart", fig))
 
-# =========================
-# c-chart (defects per unit, constant opportunity)
-# =========================
+# ========================= c-chart =========================
 elif chart_type == "c-chart":
     count_cols = count_like_columns(df)
     if not count_cols:
@@ -252,7 +255,6 @@ elif chart_type == "c-chart":
 
     c_col = st.selectbox("Defects column (count)", count_cols, key="cc_c_col")
     c = pd.to_numeric(df[c_col], errors="coerce").dropna().reset_index(drop=True)
-
     if c.empty:
         st.warning("No valid rows after cleaning.")
         st.stop()
@@ -260,6 +262,9 @@ elif chart_type == "c-chart":
     cbar = float(c.mean())
     ucl = cbar + 3 * (cbar**0.5)
     lcl = max(cbar - 3 * (cbar**0.5), 0.0)
+
+    report_inputs.append(f"<b>Chart:</b> c-chart")
+    report_inputs.append(f"<b>Defects:</b> {c_col}")
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(y=c, mode="lines+markers", name="c"))
@@ -269,10 +274,9 @@ elif chart_type == "c-chart":
     fig.update_layout(title="c-chart", xaxis_title="Order", yaxis_title="Defect count")
     st.plotly_chart(fig, use_container_width=True)
 
+    report_figs.append(("c-chart", fig))
 
-# =========================
-# u-chart (defects per unit, varying opportunity)
-# =========================
+# ========================= u-chart =========================
 elif chart_type == "u-chart":
     count_cols = count_like_columns(df)
     n_cols = positive_numeric_like_columns(df)
@@ -292,7 +296,6 @@ elif chart_type == "u-chart":
     d[n_col] = pd.to_numeric(d[n_col], errors="coerce")
     d = d.dropna()
     d = d[(d[n_col] > 0) & (d[c_col] >= 0)]
-
     if d.empty:
         st.warning("No valid rows after cleaning.")
         st.stop()
@@ -300,10 +303,13 @@ elif chart_type == "u-chart":
     u = d[c_col] / d[n_col]
     ubar = float(d[c_col].sum() / d[n_col].sum())
     se = (ubar / d[n_col]) ** 0.5
-
     d["u"] = u
     d["UCL"] = ubar + 3 * se
     d["LCL"] = (ubar - 3 * se).clip(lower=0.0)
+
+    report_inputs.append(f"<b>Chart:</b> u-chart")
+    report_inputs.append(f"<b>Defects:</b> {c_col}")
+    report_inputs.append(f"<b>Units/area:</b> {n_col}")
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(y=d["u"], mode="lines+markers", name="u"))
@@ -312,3 +318,34 @@ elif chart_type == "u-chart":
     fig.add_hline(y=ubar, line_dash="dash", annotation_text="CL")
     fig.update_layout(title="u-chart", xaxis_title="Order", yaxis_title="Defects per unit")
     st.plotly_chart(fig, use_container_width=True)
+
+    report_figs.append(("u-chart", fig))
+
+# ---- Report export (works for any chart type) ----
+st.divider()
+st.subheader("Export report")
+
+rep = Report(
+    title="ProcessIQ Report — Control Charts",
+    subtitle=f"Tool: Control Charts • {chart_type}",
+    dataset_name=dataset_name or "(unknown)",
+)
+
+rep.add_card("Inputs", "<br/>".join(report_inputs) if report_inputs else f"<b>Chart:</b> {chart_type}")
+if report_interp:
+    rep.add_card("Interpretation", "<br/>".join(report_interp))
+
+for title, fig in report_figs:
+    rep.add_figure(title, fig)
+
+for title, table in report_tables:
+    rep.add_table(title, table)
+
+html = rep.render_html().encode("utf-8")
+st.download_button(
+    "Download HTML report",
+    data=html,
+    file_name=rep.file_name("processiq_control_charts_report"),
+    mime="text/html",
+    use_container_width=True,
+)

@@ -177,14 +177,19 @@ class Report:
     def render_html(self) -> str:
         header = f"""
         {CSS}
-        <h1>{_escape(self.title)}</h1>
-        <div class="small">
-            {_escape(self.subtitle)}<br/>
-            <b>Dataset:</b> {_escape(self.dataset_name)} &nbsp; | &nbsp;
+        <div class="headerbar">
+          <div>
+            <h1>{_escape(self.title)}</h1>
+            <div class="small">{_escape(self.subtitle)}</div>
+          </div>
+          <div class="small" style="text-align:right;">
+            <b>Dataset:</b> {_escape(self.dataset_name)}<br/>
             <b>Generated:</b> {_escape(self.created_at)}
+          </div>
         </div>
         <hr/>
         """
+
         body = "\n".join(self.sections) if self.sections else "<div class='card'>No content captured.</div>"
         return "<html><head><meta charset='utf-8'/></head><body>" + header + body + "</body></html>"
 

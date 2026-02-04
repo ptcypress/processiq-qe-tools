@@ -1,26 +1,82 @@
+# pages/03_Capability.py
 from __future__ import annotations
-import streamlit as st
+
 import numpy as np
+import pandas as pd
+import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
-from scipy import stats
-from scipy.stats import norm
-from processiq.ui import set_page, df_preview, kpi_row, warn_empty
-from processiq.data import load_table, infer_numeric_columns, coerce_numeric
-from processiq.metrics import capability
+
+from processiq.ui import set_page, df_preview, warn_empty, kpi_row
+from processiq.data import infer_numeric_columns, coerce_numeric
 from processiq.shared import get_working_df
 
-set_page("Capability", icon="🎯")
 
-st.title("Capability")
-st.caption("Cp/Cpk (within) and Pp/Ppk (overall) with quick visuals.")
+def _parse_optional_float(s: str | None) -> float | None:
+    if s is None:
+        return None
+    s = str(s).strip()
+    if s == "":
+        return None
+    try:
+        return float(s)
+    except Exception:
+        return None
 
+
+def _mr_within_sigma(x: np.ndarray) -> float | None:
+    """Within sigma estimate using Moving Range of 2 (d2=1.128)."""
+    if x.size < 2:
+        return None
+    mr = np.abs(np.diff(x))
+    mrbar = float(np.mean(mr)) if mr.size else None
+    if mrbar is None or not np.isfinite(mrbar) or mrbar <= 0:
+        return None
+    return mrbar / 1.128
+
+
+def _capability(mean: float, s: float, lsl: float | None, usl: float | None):
+    if s is None or not np.isfinite(s) or s <= 0:
+        return None, None
+    cp = None
+    cpk = None
+    if lsl is not None and usl is not None:
+        cp = (usl - lsl) / (6 * s)
+    if usl is not None:
+        cpu = (usl - mean) / (3 * s)
+        cpk = cpu if cpk is None else min(cpk, cpu)
+    if lsl is not None:
+        cpl = (mean - lsl) / (3 * s)
+        cpk = cpl if cpk is None else min(cpk, cpl)
+    return cp, cpk
+
+
+def _ppm_expected_normal(mean: float, s: float, lsl: float | None, usl: float | None) -> float | None:
+    if s is None or not np.isfinite(s) or s <= 0:
+        return None
+    try:
+        from scipy.stats import norm  # type: ignore
+        p_low = norm.cdf(lsl, loc=mean, scale=s) if lsl is not None else 0.0
+        p_high = 1 - norm.cdf(usl, loc=mean, scale=s) if usl is not None else 0.0
+        return (p_low + p_high) * 1_000_000
+    except Exception:
+        return None
+
+
+set_page("Process Capability", icon="🎯")
+
+st.title("Process Capability")
+st.caption("Histogram + capability indices (Cp/Cpk and Pp/Ppk) with optional Target/Nominal line.")
+
+# ---- Data source (shared or upload) ----
 df, name = get_working_df(key_prefix="capability")
 if df is None:
     warn_empty("Upload a dataset here OR load one in Data Explorer and use the shared dataset.")
     st.stop()
 
 df_preview(df)
+
+st.divider()
 
 numeric_cols = infer_numeric_columns(df)
 if not numeric_cols:
@@ -29,85 +85,53 @@ if not numeric_cols:
 
 col = st.selectbox("Measurement column", numeric_cols)
 
+x_series = coerce_numeric(df[col]).dropna()
+x = x_series.to_numpy()
+if x.size < 5:
+    st.warning("Not enough numeric data after cleaning (need at least ~5 points).")
+    st.stop()
+
+# ---- Spec + target inputs ----
 c1, c2, c3 = st.columns(3)
 with c1:
-    lsl_s = st.text_input("LSL (optional)", value="")
+    lsl_in = st.text_input("LSL (optional)", value="")
 with c2:
-    usl_s = st.text_input("USL (optional)", value="")
+    usl_in = st.text_input("USL (optional)", value="")
 with c3:
-    do_norm = st.checkbox("Normality check (Anderson-Darling)", value=False)
+    tgt_in = st.text_input("Target / Nominal (optional)", value="")
 
-def parse_float(s):
-    s = str(s).strip()
-    if s == "":
-        return None
-    try:
-        return float(s)
-    except:
-        return None
+lsl = _parse_optional_float(lsl_in)
+usl = _parse_optional_float(usl_in)
 
-lsl = parse_float(lsl_s)
-usl = parse_float(usl_s)
+target = _parse_optional_float(tgt_in)
+if target is None and (lsl is not None and usl is not None):
+    target = (lsl + usl) / 2.0  # auto-midpoint fallback
 
-x = coerce_numeric(df[col]).dropna()
-res = capability(x, lsl, usl)
+# ---- Stats ----
+mean = float(np.mean(x))
+stdev_overall = float(np.std(x, ddof=1)) if x.size > 1 else float("nan")
+stdev_within = _mr_within_sigma(x)
 
-kpi_row([
-    ("n", f"{res.n}"),
-    ("Mean", f"{res.mean:.6g}"),
-    ("σ within (I-MR)", f"{res.stdev_within:.6g}" if res.stdev_within is not None else "—"),
-    ("σ overall", f"{res.stdev_overall:.6g}" if res.stdev_overall is not None else "—"),
-    ("Cp", f"{res.cp:.3f}" if res.cp is not None else "—"),
-    ("Cpk", f"{res.cpk:.3f}" if res.cpk is not None else "—"),
-    ("Pp", f"{res.pp:.3f}" if res.pp is not None else "—"),
-    ("Ppk", f"{res.ppk:.3f}" if res.ppk is not None else "—"),
-])
+pp, ppk = _capability(mean, stdev_overall, lsl, usl)
+cp, cpk = (None, None)
+if stdev_within is not None:
+    cp, cpk = _capability(mean, stdev_within, lsl, usl)
+
+# Observed PPM
 oos = 0
 if lsl is not None:
-    oos += int((x < lsl).sum())
+    oos += int(np.sum(x < lsl))
 if usl is not None:
-    oos += int((x > usl).sum())
-obs_ppm = (oos / len(x)) * 1_000_000 if len(x) else float("nan")
+    oos += int(np.sum(x > usl))
+obs_ppm = (oos / x.size) * 1_000_000
 
-st.divider()
-fig = px.histogram(x.to_frame(name=col), x=col, nbins=40, marginal="box")
-xx = np.linspace(x.min(), x.max(), 300)
-yy = norm.pdf(xx, loc=res.mean, scale=res.stdev_overall)
-fig.add_trace(
-    go.Scatter(
-        x=xx,
-        y=yy,
-        mode="lines",
-        name="Overall normal",
-        line=dict(width=2)
-    )
-)
-if lsl is not None:
-    fig.add_vline(x=lsl, line_dash="dot", annotation_text="LSL")
-if usl is not None:
-    fig.add_vline(x=usl, line_dash="dot", annotation_text="USL")
-st.plotly_chart(fig, use_container_width=True)
+# Expected PPM (normal, overall sigma)
+exp_ppm = _ppm_expected_normal(mean, stdev_overall, lsl, usl)
 
-if do_norm and len(x) >= 8:
-    st.subheader("Normality (Anderson-Darling)")
-    ad = stats.anderson(x, dist="norm")
-    st.write(f"AD statistic: **{ad.statistic:.4f}**")
-    st.write("Critical values (for normal):")
-    st.dataframe({"significance_%": ad.significance_level, "critical_value": ad.critical_values}, use_container_width=True)
-    st.caption("Rule of thumb: if AD statistic > critical value at a chosen significance level, reject normality.")
-
-exp_ppm = None
-if res.stdev_overall is not None and res.stdev_overall > 0:
-    from scipy.stats import norm
-    mu = res.mean
-    s = res.stdev_overall
-    p_low = norm.cdf(lsl, loc=mu, scale=s) if lsl is not None else 0.0
-    p_high = 1 - norm.cdf(usl, loc=mu, scale=s) if usl is not None else 0.0
-    exp_ppm = (p_low + p_high) * 1_000_000
-
-score = res.ppk if res.ppk is not None else res.cpk
+# Decision label (based on Ppk if available, else Cpk)
+score = ppk if ppk is not None else cpk
 label = "—"
-if score is not None:
+if score is not None and np.isfinite(score):
     if score >= 1.33:
         label = "PASS (≥ 1.33)"
     elif score >= 1.00:
@@ -115,11 +139,85 @@ if score is not None:
     else:
         label = "FAIL (< 1.00)"
 
-kpi_row([
-    ("Decision", label),
-    ("Observed OOS", f"{oos}"),
-    ("Observed PPM", f"{obs_ppm:,.0f}" if np.isfinite(obs_ppm) else "—"),
-    ("Expected PPM (normal)", f"{exp_ppm:,.0f}" if exp_ppm is not None else "—"),
-])
+# ---- KPIs ----
+kpi_row(
+    [
+        ("N", f"{x.size:,}"),
+        ("Mean", f"{mean:.5g}"),
+        ("Stdev (overall)", f"{stdev_overall:.5g}"),
+        ("Stdev (within)", f"{stdev_within:.5g}" if stdev_within is not None else "—"),
+    ]
+)
 
+kpi_row(
+    [
+        ("Cp", f"{cp:.3f}" if cp is not None else "—"),
+        ("Cpk", f"{cpk:.3f}" if cpk is not None else "—"),
+        ("Pp", f"{pp:.3f}" if pp is not None else "—"),
+        ("Ppk", f"{ppk:.3f}" if ppk is not None else "—"),
+    ]
+)
 
+kpi_row(
+    [
+        ("Decision", label),
+        ("Observed OOS", f"{oos:,}"),
+        ("Observed PPM", f"{obs_ppm:,.0f}"),
+        ("Expected PPM (normal)", f"{exp_ppm:,.0f}" if exp_ppm is not None else "—"),
+    ]
+)
+
+# ---- Plot ----
+st.subheader("Histogram with normal curves")
+
+nbins = st.slider("Bins", min_value=10, max_value=80, value=30, step=1)
+
+fig = px.histogram(x, nbins=nbins, histnorm="probability density")
+fig.update_layout(xaxis_title=col, yaxis_title="Density")
+
+# Spec lines
+if lsl is not None:
+    fig.add_vline(x=lsl, line_dash="dot", annotation_text="LSL", annotation_position="top")
+if usl is not None:
+    fig.add_vline(x=usl, line_dash="dot", annotation_text="USL", annotation_position="top")
+
+# Mean + Target lines
+fig.add_vline(
+    x=mean,
+    line_dash="dash",
+    annotation_text="Mean",
+    annotation_position="top",
+)
+
+if target is not None:
+    fig.add_vline(
+        x=target,
+        line_dash="solid",
+        annotation_text="Target",
+        annotation_position="top",
+    )
+
+# Normal curves
+xx = np.linspace(float(np.min(x)), float(np.max(x)), 300)
+
+try:
+    from scipy.stats import norm  # type: ignore
+
+    # Overall curve
+    yy_overall = norm.pdf(xx, loc=mean, scale=stdev_overall)
+    fig.add_trace(go.Scatter(x=xx, y=yy_overall, mode="lines", name="Overall normal"))
+
+    # Within curve (if available)
+    if stdev_within is not None and stdev_within > 0:
+        yy_within = norm.pdf(xx, loc=mean, scale=stdev_within)
+        fig.add_trace(go.Scatter(x=xx, y=yy_within, mode="lines", name="Within normal", line=dict(dash="dash")))
+
+except Exception:
+    st.info("Normal curve overlay requires scipy. (Histogram + capability indices still valid.)")
+
+st.plotly_chart(fig, use_container_width=True)
+
+st.caption(
+    "If Target is left blank, ProcessIQ uses the midpoint between LSL and USL (when both are provided). "
+    "Overall normal uses long-term variation (Pp/Ppk). Within normal uses short-term variation via moving range (Cp/Cpk)."
+)

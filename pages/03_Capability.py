@@ -11,6 +11,7 @@ from processiq.data import coerce_numeric
 from processiq.shared import get_working_df
 from processiq.columns import numeric_like_columns
 from processiq.reporting import Report
+from processiq.report_builder import ReportSection, add_section
 
 
 def _parse_optional_float(s: str | None) -> float | None:
@@ -125,13 +126,19 @@ exp_ppm = _ppm_expected_normal(mean, stdev_overall, lsl, usl)
 
 score = ppk if ppk is not None else cpk
 label = "—"
+level = "success"
 if score is not None and np.isfinite(score):
     if score >= 1.33:
         label = "PASS (≥ 1.33)"
+        level = "success"
     elif score >= 1.00:
         label = "BORDERLINE (1.00–1.33)"
+        level = "warn"
     else:
         label = "FAIL (< 1.00)"
+        level = "error"
+else:
+    level = "warn"
 
 kpi_row(
     [
@@ -161,21 +168,11 @@ kpi_row(
 # ---- Interpretation ----
 st.subheader("Interpretation")
 interp_lines: list[str] = []
-
 if target is not None:
     offset = mean - target
     interp_lines.append(f"Centering: Mean − Target = {offset:+.4g}.")
 else:
     interp_lines.append("Centering: No target provided (midpoint used if LSL & USL are provided).")
-
-if label.startswith("PASS"):
-    st.success("Capability: looks capable. (Assuming process is stable.)")
-elif label.startswith("BORDERLINE"):
-    st.warning("Capability: borderline. Risk depends on cost/criticality and tail behavior.")
-elif label.startswith("FAIL"):
-    st.error("Capability: not capable. Reduce variation and/or re-center.")
-else:
-    st.info("Capability indices require at least one spec limit and valid variation estimates.")
 
 st.caption("Reminder: If the process is not stable, capability numbers can be misleading.")
 
@@ -184,6 +181,8 @@ st.subheader("Histogram with normal curves")
 nbins = st.slider("Bins", min_value=10, max_value=80, value=30, step=1, key="cap_bins")
 
 fig = px.histogram(x, nbins=nbins, histnorm="probability density")
+# Keep bins visible in reports too (your report theming also enforces this)
+fig.update_traces(selector=dict(type="histogram"), opacity=0.55, marker_line_width=0)
 fig.update_layout(xaxis_title=col, yaxis_title="Density")
 
 if lsl is not None:
@@ -210,49 +209,66 @@ st.plotly_chart(fig, use_container_width=True)
 
 # ---- Report export ----
 st.divider()
-st.subheader("Export report")
+st.subheader("Export / Add to Report Builder")
+
+inputs_html = "<br/>".join(
+    [
+        f"<b>Measurement:</b> {col}",
+        f"<b>LSL:</b> {lsl if lsl is not None else '—'}",
+        f"<b>USL:</b> {usl if usl is not None else '—'}",
+        f"<b>Target:</b> {target if target is not None else '—'}",
+    ]
+)
+
+kpis = [
+    ("N", f"{x.size:,}"),
+    ("Mean", f"{mean:.5g}"),
+    ("Cp", f"{cp:.3f}" if cp is not None else "—"),
+    ("Cpk", f"{cpk:.3f}" if cpk is not None else "—"),
+    ("Pp", f"{pp:.3f}" if pp is not None else "—"),
+    ("Ppk", f"{ppk:.3f}" if ppk is not None else "—"),
+    ("Observed PPM", f"{obs_ppm:,.0f}"),
+    ("Expected PPM", f"{exp_ppm:,.0f}" if exp_ppm is not None else "—"),
+    ("Decision", label),
+]
 
 rep = Report(
     title="ProcessIQ Report — Capability",
     subtitle=f"Tool: Capability • Column: {col}",
-    dataset_name=dataset_name or name or "(unknown)",
+    dataset_name=dataset_name or "(unknown)",
 )
-
-rep.add_card(
-    "Inputs",
-    "<br/>".join(
-        [
-            f"<b>Measurement:</b> {col}",
-            f"<b>LSL:</b> {lsl if lsl is not None else '—'}",
-            f"<b>USL:</b> {usl if usl is not None else '—'}",
-            f"<b>Target:</b> {target if target is not None else '—'}",
-        ]
-    ),
-)
-
-rep.add_kpis(
-    "Key results",
-    [
-        ("N", f"{x.size:,}"),
-        ("Mean", f"{mean:.5g}"),
-        ("Cp", f"{cp:.3f}" if cp is not None else "—"),
-        ("Cpk", f"{cpk:.3f}" if cpk is not None else "—"),
-        ("Pp", f"{pp:.3f}" if pp is not None else "—"),
-        ("Ppk", f"{ppk:.3f}" if ppk is not None else "—"),
-        ("Observed PPM", f"{obs_ppm:,.0f}"),
-        ("Expected PPM", f"{exp_ppm:,.0f}" if exp_ppm is not None else "—"),
-        ("Decision", label),
-    ],
-)
-
+rep.add_card("Inputs", inputs_html)
+rep.add_kpis("Key results", kpis)
 rep.add_card("Interpretation", "<br/>".join(interp_lines))
 rep.add_figure("Histogram + curves", fig)
 
-html = rep.render_html().encode("utf-8")
-st.download_button(
-    "Download HTML report",
-    data=html,
-    file_name=rep.file_name("processiq_capability_report"),
-    mime="text/html",
-    use_container_width=True,
-)
+colA, colB = st.columns(2)
+
+with colA:
+    html = rep.render_html().encode("utf-8")
+    st.download_button(
+        "Download HTML report",
+        data=html,
+        file_name=rep.file_name("processiq_capability_report"),
+        mime="text/html",
+        use_container_width=True,
+        key="cap_dl_html",
+    )
+
+with colB:
+    if st.button("Add to Report Builder", use_container_width=True, key="cap_add_rb"):
+        add_section(
+            ReportSection(
+                tool="Capability",
+                subtitle=f"Column: {col}",
+                dataset_name=dataset_name or "(unknown)",
+                inputs_html=inputs_html,
+                interpretation_html="<br/>".join(interp_lines),
+                kpis=kpis,
+                badge_text=f"Decision: {label}",
+                badge_level=level,
+                figures=[("Histogram + curves", fig)],
+                tables=[],
+            )
+        )
+        st.success("Added Capability section to Report Builder.")

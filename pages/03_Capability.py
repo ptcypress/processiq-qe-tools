@@ -10,6 +10,7 @@ from processiq.ui import set_page, df_preview, warn_empty, kpi_row
 from processiq.data import coerce_numeric
 from processiq.shared import get_working_df
 from processiq.columns import numeric_like_columns
+from processiq.reporting import Report
 
 
 def _parse_optional_float(s: str | None) -> float | None:
@@ -25,7 +26,6 @@ def _parse_optional_float(s: str | None) -> float | None:
 
 
 def _mr_within_sigma(x: np.ndarray) -> float | None:
-    """Within sigma estimate using Moving Range of 2 (d2=1.128)."""
     if x.size < 2:
         return None
     mr = np.abs(np.diff(x))
@@ -71,14 +71,12 @@ st.title("Process Capability")
 st.caption("Histogram + capability indices (Cp/Cpk and Pp/Ppk) with optional Target line.")
 st.caption("Only numeric-like columns are shown.")
 
-# ---- Data source (shared or upload) ----
-df, name = get_working_df(key_prefix="capability")
+df, dataset_name = get_working_df(key_prefix="capability")
 if df is None:
     warn_empty("Upload a dataset here OR load one in Data Explorer and use the shared dataset.")
     st.stop()
 
 df_preview(df)
-
 st.divider()
 
 num_cols = numeric_like_columns(df)
@@ -94,7 +92,6 @@ if x.size < 5:
     st.warning("Not enough numeric data after cleaning (need at least ~5 points).")
     st.stop()
 
-# ---- Spec + target inputs ----
 c1, c2, c3 = st.columns(3)
 with c1:
     lsl_in = st.text_input("LSL (optional)", value="", key="cap_lsl")
@@ -105,12 +102,10 @@ with c3:
 
 lsl = _parse_optional_float(lsl_in)
 usl = _parse_optional_float(usl_in)
-
 target = _parse_optional_float(tgt_in)
 if target is None and (lsl is not None and usl is not None):
-    target = (lsl + usl) / 2.0  # fallback midpoint if blank
+    target = (lsl + usl) / 2.0
 
-# ---- Stats ----
 mean = float(np.mean(x))
 stdev_overall = float(np.std(x, ddof=1)) if x.size > 1 else float("nan")
 stdev_within = _mr_within_sigma(x)
@@ -120,18 +115,14 @@ cp, cpk = (None, None)
 if stdev_within is not None:
     cp, cpk = _capability(mean, stdev_within, lsl, usl)
 
-# Observed PPM
 oos = 0
 if lsl is not None:
     oos += int(np.sum(x < lsl))
 if usl is not None:
     oos += int(np.sum(x > usl))
 obs_ppm = (oos / x.size) * 1_000_000
-
-# Expected PPM (normal, overall sigma)
 exp_ppm = _ppm_expected_normal(mean, stdev_overall, lsl, usl)
 
-# Decision label
 score = ppk if ppk is not None else cpk
 label = "—"
 if score is not None and np.isfinite(score):
@@ -142,7 +133,6 @@ if score is not None and np.isfinite(score):
     else:
         label = "FAIL (< 1.00)"
 
-# ---- KPIs ----
 kpi_row(
     [
         ("N", f"{x.size:,}"),
@@ -151,7 +141,6 @@ kpi_row(
         ("Stdev (within)", f"{stdev_within:.5g}" if stdev_within is not None else "—"),
     ]
 )
-
 kpi_row(
     [
         ("Cp", f"{cp:.3f}" if cp is not None else "—"),
@@ -160,7 +149,6 @@ kpi_row(
         ("Ppk", f"{ppk:.3f}" if ppk is not None else "—"),
     ]
 )
-
 kpi_row(
     [
         ("Decision", label),
@@ -172,11 +160,13 @@ kpi_row(
 
 # ---- Interpretation ----
 st.subheader("Interpretation")
+interp_lines: list[str] = []
+
 if target is not None:
     offset = mean - target
-    st.info(f"Centering: Mean − Target = {offset:+.4g} (Target line is shown on the chart).")
+    interp_lines.append(f"Centering: Mean − Target = {offset:+.4g}.")
 else:
-    st.info("Centering: No target provided. (If you enter LSL & USL and leave Target blank, midpoint is used.)")
+    interp_lines.append("Centering: No target provided (midpoint used if LSL & USL are provided).")
 
 if label.startswith("PASS"):
     st.success("Capability: looks capable. (Assuming process is stable.)")
@@ -185,37 +175,31 @@ elif label.startswith("BORDERLINE"):
 elif label.startswith("FAIL"):
     st.error("Capability: not capable. Reduce variation and/or re-center.")
 else:
-    st.caption("Capability indices require at least one spec limit and valid variation estimates.")
+    st.info("Capability indices require at least one spec limit and valid variation estimates.")
 
 st.caption("Reminder: If the process is not stable, capability numbers can be misleading.")
 
 # ---- Plot ----
 st.subheader("Histogram with normal curves")
-
 nbins = st.slider("Bins", min_value=10, max_value=80, value=30, step=1, key="cap_bins")
 
 fig = px.histogram(x, nbins=nbins, histnorm="probability density")
 fig.update_layout(xaxis_title=col, yaxis_title="Density")
 
-# Spec lines
 if lsl is not None:
     fig.add_vline(x=lsl, line_dash="dot", annotation_text="LSL", annotation_position="top")
 if usl is not None:
     fig.add_vline(x=usl, line_dash="dot", annotation_text="USL", annotation_position="top")
 
-# Mean + Target lines
 fig.add_vline(x=mean, line_dash="dash", annotation_text="Mean", annotation_position="top")
 if target is not None:
     fig.add_vline(x=target, line_dash="solid", annotation_text="Target", annotation_position="top")
 
-# Normal curves
 xx = np.linspace(float(np.min(x)), float(np.max(x)), 300)
 try:
     from scipy.stats import norm  # type: ignore
-
     yy_overall = norm.pdf(xx, loc=mean, scale=stdev_overall)
     fig.add_trace(go.Scatter(x=xx, y=yy_overall, mode="lines", name="Overall normal"))
-
     if stdev_within is not None and stdev_within > 0:
         yy_within = norm.pdf(xx, loc=mean, scale=stdev_within)
         fig.add_trace(go.Scatter(x=xx, y=yy_within, mode="lines", name="Within normal", line=dict(dash="dash")))
@@ -224,7 +208,51 @@ except Exception:
 
 st.plotly_chart(fig, use_container_width=True)
 
-st.caption(
-    "If Target is left blank, ProcessIQ uses the midpoint between LSL and USL (when both are provided). "
-    "Overall normal uses long-term variation (Pp/Ppk). Within normal uses short-term variation via moving range (Cp/Cpk)."
+# ---- Report export ----
+st.divider()
+st.subheader("Export report")
+
+rep = Report(
+    title="ProcessIQ Report — Capability",
+    subtitle=f"Tool: Capability • Column: {col}",
+    dataset_name=dataset_name or name or "(unknown)",
+)
+
+rep.add_card(
+    "Inputs",
+    "<br/>".join(
+        [
+            f"<b>Measurement:</b> {col}",
+            f"<b>LSL:</b> {lsl if lsl is not None else '—'}",
+            f"<b>USL:</b> {usl if usl is not None else '—'}",
+            f"<b>Target:</b> {target if target is not None else '—'}",
+        ]
+    ),
+)
+
+rep.add_kpis(
+    "Key results",
+    [
+        ("N", f"{x.size:,}"),
+        ("Mean", f"{mean:.5g}"),
+        ("Cp", f"{cp:.3f}" if cp is not None else "—"),
+        ("Cpk", f"{cpk:.3f}" if cpk is not None else "—"),
+        ("Pp", f"{pp:.3f}" if pp is not None else "—"),
+        ("Ppk", f"{ppk:.3f}" if ppk is not None else "—"),
+        ("Observed PPM", f"{obs_ppm:,.0f}"),
+        ("Expected PPM", f"{exp_ppm:,.0f}" if exp_ppm is not None else "—"),
+        ("Decision", label),
+    ],
+)
+
+rep.add_card("Interpretation", "<br/>".join(interp_lines))
+rep.add_figure("Histogram + curves", fig)
+
+html = rep.render_html().encode("utf-8")
+st.download_button(
+    "Download HTML report",
+    data=html,
+    file_name=rep.file_name("processiq_capability_report"),
+    mime="text/html",
+    use_container_width=True,
 )

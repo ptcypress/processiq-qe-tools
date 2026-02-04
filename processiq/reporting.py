@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, Iterable
 
 import pandas as pd
+import plotly.express as px
 
 try:
     import plotly.io as pio
@@ -143,10 +144,20 @@ def apply_plotly_report_theme(fig):
     if fig is None:
         return fig
     try:
+        # Keep report styling consistent
         fig.update_layout(
             template="plotly_white",
-            font=dict(family="Arial", size=12),
             margin=dict(l=40, r=20, t=50, b=40),
+            # Force Plotly's default qualitative palette so bars don't go black
+            colorway=px.colors.qualitative.Plotly,
+        )
+
+        # Make histogram bars match palette + allow overlaps (so curves are visible)
+        fig.update_traces(
+            selector=dict(type="histogram"),
+            marker_color=px.colors.qualitative.Plotly[0],
+            opacity=0.55,
+            marker_line_width=0,
         )
     except Exception:
         pass

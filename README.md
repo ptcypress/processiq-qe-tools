@@ -1,20 +1,28 @@
-# ProcessIQ QE Tools (Streamlit)
-A practical “cheap alternative to Minitab” focused on the most used, highest-impact Quality / Manufacturing analytics.
+# ProcessIQ
 
-## Included tools (v0 scaffold)
-- **Data Explorer** (upload CSV/XLSX, filter, plot, export)
-- **Control Charts**: I‑MR, Xbar‑R (subgroup), p-chart (attribute)
-- **Capability**: Cp/Cpk/Pp/Ppk + histogram + optional normality test
-- **Pareto**: counts by category + cumulative %
-- **Regression Quick Check**: OLS + scatter + coefficients
-- **Gage R&R (Crossed, ANOVA)**: Part × Operator with repeats
+A practical, affordable alternative to heavyweight quality suites — focused on the most-used QE / Mfg Eng / Ops tools, with clean reports and a smooth workflow.
 
-## Run locally
+## Who it's for
+- Quality Engineers (SPC, capability, MSA)
+- Manufacturing Engineers (screening, Pareto, regression)
+- Operations Managers (quick answers + printable results)
+
+## What it includes
+- Data Explorer (shared dataset across tools)
+- Control Charts (I-MR, Xbar-R, p/np/c/u)
+- Capability (Cp/Cpk, Pp/Ppk + report-ready visuals)
+- Gage R&R (Crossed ANOVA)
+- Regression (OLS screening)
+- Pareto
+- Report Builder (combine outputs → one report)
+
+## 30-second demo
+1. Load sample dataset in Data Explorer
+2. Run Control Charts and Capability
+3. Add to Report Builder
+4. Export combined HTML report
+
+## Run it (3 ways)
+### 1) Docker (recommended for deployment)
 ```bash
-pip install -r requirements.txt
-streamlit run app.py
-```
-
-## Notes
-- This is intentionally opinionated: *fast decision support* over exhaustive stats menus.
-- Add new tools by creating a file under `pages/`.
+docker compose up --build
